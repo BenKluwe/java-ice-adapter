@@ -41,6 +41,7 @@ public class PeerIceModule {
     private volatile IceState iceState = NEW;
     private volatile boolean connected = false;
     private volatile Thread listenerThread;
+    private volatile CompletableFuture gatheringFuture;
 
     private PeerTurnRefreshModule turnRefreshModule;
 
@@ -52,6 +53,7 @@ public class PeerIceModule {
 
     public PeerIceModule(Peer peer) {
         this.peer = peer;
+        this.gatheringFuture = null;
     }
 
     /**
@@ -101,7 +103,7 @@ public class PeerIceModule {
                         .forEach(agent::addCandidateHarvester)
         );
 
-        CompletableFuture gatheringFuture = CompletableFuture.runAsync(() -> {
+        gatheringFuture = CompletableFuture.runAsync(() -> {
             try {
                 component = agent.createComponent(mediaStream, Transport.UDP, MINIMUM_PORT + (int) (Math.random() * 999.0), MINIMUM_PORT, MINIMUM_PORT + 1000);
             } catch (IOException e) {
@@ -109,14 +111,9 @@ public class PeerIceModule {
             }
         });
 
-        Executor.executeDelayed(5000, () -> {
-            if(! gatheringFuture.isDone()) {
-                gatheringFuture.cancel(true);
-            }
-        });
-
         try {
             gatheringFuture.join();
+            gatheringFuture = null;
         } catch(CompletionException e) {
             //Completed exceptionally
             log.error(getLogPrefix() + "Error while creating stream component/gathering candidates", e);
@@ -128,7 +125,6 @@ public class PeerIceModule {
             new Thread(this::onConnectionLost).start();
             return;
         }
-
 
         int previousConnectivityAttempts = getConnectivityAttempsInThePast(FORCE_SRFLX_RELAY_INTERVAL);
         CandidatesMessage localCandidatesMessage = CandidateUtil.packCandidates(IceAdapter.id, peer.getRemoteId(), agent, component, previousConnectivityAttempts < FORCE_SRFLX_COUNT && IceAdapter.ALLOW_HOST, previousConnectivityAttempts < FORCE_RELAY_COUNT && IceAdapter.ALLOW_REFLEXIVE, IceAdapter.ALLOW_RELAY);
@@ -204,7 +200,6 @@ public class PeerIceModule {
         agent.startConnectivityEstablishment();
 
         //Wait for termination/completion of the agent
-        long iceStartTime = System.currentTimeMillis();
         while (agent.getState() != IceProcessingState.COMPLETED) {//TODO include more?, maybe stop on COMPLETED, is that to early?
             try {
                 Thread.sleep(20);
@@ -213,13 +208,6 @@ public class PeerIceModule {
             }
 
             if (agent.getState() == IceProcessingState.FAILED) {//TODO null pointer due to no agent?
-                onConnectionLost();
-                return;
-            }
-
-
-            if(System.currentTimeMillis() - iceStartTime > 15_000) {
-                log.error(getLogPrefix() + "ABORTING ICE DUE TO TIMEOUT");
                 onConnectionLost();
                 return;
             }
@@ -393,6 +381,10 @@ public class PeerIceModule {
     }
 
     void close() {
+        if(gatheringFuture != null && !gatheringFuture.isDone())
+        {
+            gatheringFuture.cancel(true);
+        }
         if(turnRefreshModule != null) {
             turnRefreshModule.close();
         }
