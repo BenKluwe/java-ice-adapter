@@ -207,7 +207,10 @@ public class PeerIceModule {
                 log.error(getLogPrefix() + "Interrupted while waiting for ICE", e);
             }
 
-            if (agent.getState() == IceProcessingState.FAILED) {//TODO null pointer due to no agent?
+            if (
+                agent.getState() == IceProcessingState.FAILED ||
+                agent.getState() == IceProcessingState.TERMINATED
+            ) { //TODO null pointer due to no agent?
                 onConnectionLost();
                 return;
             }
